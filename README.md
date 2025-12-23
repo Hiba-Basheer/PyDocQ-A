@@ -79,8 +79,10 @@ Raw Python documentation files are excluded from the repository to keep it light
 Precomputed FAISS indexes and processed artifacts are included to enable instant evaluation and fast querying without rebuilding embeddings.
 
 📈 Performance Optimization
-Stage	Naive Approach	Optimized Approach
-Embedding	Every run	One-time offline
-Indexing	Every run	Persisted FAISS
-Query latency	Minutes	~1–2 seconds
-Startup time	High	Low
+```
+Stage	           Naive Approach	     Optimized Approach
+Embedding	       Every run	         One-time offline
+Indexing	       Every run	         Persisted FAISS
+Query latency	   Minutes	           ~1–2 seconds
+Startup time	   High	               Low
+```
