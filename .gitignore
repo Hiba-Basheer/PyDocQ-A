@@ -20,3 +20,5 @@ Thumbs.db
 # Large model files (optional)
 *.safetensors
 *.bin
+
+data/
