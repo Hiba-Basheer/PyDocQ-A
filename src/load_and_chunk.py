@@ -92,7 +92,7 @@ def main() -> None:
         return
 
     sample = chunks[0]
-    LOGGER.info("--- Sample Chunk ---")
+    LOGGER.info("Sample Chunk")
     LOGGER.info(sample.page_content[:500])
     LOGGER.info("Source: %s", sample.metadata.get("source"))
 

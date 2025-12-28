@@ -7,7 +7,7 @@ the embedding and indexing pipeline.
 
 import logging
 from typing import List
-
+import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
