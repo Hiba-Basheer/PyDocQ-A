@@ -1,7 +1,7 @@
 """
 Load text documents from disk and split them into overlapping chunks.
 
-This module provides utilities for loading `.txt` files using LangChain
+This module provides lightweight utilities for loading `.txt` files
 and chunking them for downstream embedding and retrieval tasks.
 """
 
@@ -9,20 +9,21 @@ import logging
 import os
 from typing import List
 
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# Configuration
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 100
 
 # Logging configuration
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 LOGGER = logging.getLogger(__name__)
 
+
 # Document loading
 
-def load_txt_documents(data_dir: str) -> List:
+def load_txt_documents(data_dir: str) -> List[str]:
     """
     Load all `.txt` files from the given directory.
 
@@ -30,10 +31,10 @@ def load_txt_documents(data_dir: str) -> List:
         data_dir (str): Path to directory containing text files.
 
     Returns:
-        List: List of LangChain Document objects.
+        List[str]: List of document texts.
     """
     LOGGER.info("Loading .txt documents from %s", data_dir)
-    documents = []
+    documents: List[str] = []
 
     for filename in os.listdir(data_dir):
         if not filename.endswith(".txt"):
@@ -42,9 +43,8 @@ def load_txt_documents(data_dir: str) -> List:
         file_path = os.path.join(data_dir, filename)
         LOGGER.debug("Loading file: %s", file_path)
 
-        loader = TextLoader(file_path, encoding="utf-8")
-        docs = loader.load()
-        documents.extend(docs)
+        with open(file_path, "r", encoding="utf-8") as file:
+            documents.append(file.read())
 
     LOGGER.info("Loaded %d documents", len(documents))
     return documents
@@ -52,25 +52,28 @@ def load_txt_documents(data_dir: str) -> List:
 
 # Document chunking
 
-def chunk_documents(documents: List) -> List:
+def chunk_documents(documents: List[str]) -> List[str]:
     """
     Split documents into overlapping text chunks.
 
     Args:
-        documents (List): List of LangChain Document objects.
+        documents (List[str]): List of document texts.
 
     Returns:
-        List: List of chunked Document objects.
+        List[str]: List of chunked text segments.
     """
     LOGGER.info("Chunking %d documents", len(documents))
+    chunks: List[str] = []
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100,
-        separators=["\n\n", "\n", " ", ""],
-    )
+    for doc in documents:
+        start = 0
+        doc_length = len(doc)
 
-    chunks = text_splitter.split_documents(documents)
+        while start < doc_length:
+            end = start + CHUNK_SIZE
+            chunk = doc[start:end]
+            chunks.append(chunk)
+            start += CHUNK_SIZE - CHUNK_OVERLAP
 
     LOGGER.info("Created %d chunks", len(chunks))
     return chunks
@@ -91,10 +94,8 @@ def main() -> None:
         LOGGER.warning("No chunks created")
         return
 
-    sample = chunks[0]
-    LOGGER.info("Sample Chunk")
-    LOGGER.info(sample.page_content[:500])
-    LOGGER.info("Source: %s", sample.metadata.get("source"))
+    LOGGER.info("Sample Chunk:")
+    LOGGER.info(chunks[0][:500])
 
 
 if __name__ == "__main__":

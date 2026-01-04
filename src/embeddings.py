@@ -14,7 +14,6 @@ from sentence_transformers import SentenceTransformer
 from load_and_chunk import chunk_documents, load_txt_documents
 
 # Logging configuration
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -23,12 +22,12 @@ LOGGER = logging.getLogger(__name__)
 
 # Embedding & indexing functions
 
-def create_embeddings(chunks: List) -> "np.ndarray":
+def create_embeddings(chunks: List[str]) -> "np.ndarray":
     """
     Convert text chunks into vector embeddings.
 
     Args:
-        chunks (List): List of document chunks containing `page_content`.
+        chunks (List[str]): List of document text chunks (plain strings).
 
     Returns:
         np.ndarray: Array of shape (num_chunks, embedding_dimension).
@@ -37,8 +36,7 @@ def create_embeddings(chunks: List) -> "np.ndarray":
     model = SentenceTransformer("all-MiniLM-L6-v2")
 
     LOGGER.info("Encoding %d text chunks into embeddings", len(chunks))
-    texts = [chunk.page_content for chunk in chunks]
-    embeddings = model.encode(texts, show_progress_bar=True)
+    embeddings = model.encode(chunks, show_progress_bar=True)
 
     LOGGER.info("Embeddings created with shape %s", embeddings.shape)
     return embeddings
@@ -66,7 +64,6 @@ def store_embeddings(embeddings: "np.ndarray") -> faiss.Index:
 
 
 # Script entry point
-
 def main() -> None:
     """
     Load documents, chunk them, create embeddings, and store them in FAISS.

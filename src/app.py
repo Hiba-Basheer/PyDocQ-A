@@ -2,8 +2,18 @@
 Streamlit application for semantic search and Q&A over Python documentation.
 
 This app loads a FAISS index and document chunks, performs semantic search
-using sentence embeddings, and answers user questions using an LLM.
+using sentence embeddings, and answers user questions using a Seq2Seq LLM.
 """
+
+# Environment
+
+import os
+
+# Prevent Hugging Face from importing TensorFlow / Flax
+os.environ["TRANSFORMERS_NO_TF"] = "1"
+os.environ["TRANSFORMERS_NO_FLAX"] = "1"
+
+# Standard Imports
 
 import logging
 import pickle
@@ -11,8 +21,9 @@ from typing import List, Tuple
 
 import faiss
 import streamlit as st
+import torch
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 # Configuration
 
@@ -21,12 +32,16 @@ INDEX_PATH = f"{ARTIFACT_DIR}/faiss.index"
 CHUNKS_PATH = f"{ARTIFACT_DIR}/chunks.pkl"
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-LLM_MODEL_NAME = "google/flan-t5-base"
+LLM_MODEL_NAME = "google/flan-t5-small"  
 
 TOP_K = 5
 MAX_CONTEXT_CHARS = 2000
+MAX_INPUT_TOKENS = 512
+MAX_NEW_TOKENS = 200
 
-# Logging configuration
+DEVICE = "cpu" 
+
+# Logging
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,43 +49,40 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-# Resource loading (cached)
+# Resource Loading
 
 @st.cache_resource
 def load_resources() -> Tuple[
     faiss.Index,
     List,
     SentenceTransformer,
-    pipeline,
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
 ]:
     """
-    Load and cache FAISS index, document chunks, embedding model, and LLM.
-
-    Returns:
-        Tuple containing FAISS index, document chunks, embedding model,
-        and text-generation pipeline.
+    Load and cache FAISS index, document chunks,
+    embedding model, tokenizer, and LLM.
     """
-    LOGGER.info("Loading FAISS index from %s", INDEX_PATH)
+    LOGGER.info("Loading FAISS index")
     index = faiss.read_index(INDEX_PATH)
 
-    LOGGER.info("Loading document chunks from %s", CHUNKS_PATH)
-    with open(CHUNKS_PATH, "rb") as file:
-        chunks = pickle.load(file)
+    LOGGER.info("Loading document chunks")
+    with open(CHUNKS_PATH, "rb") as f:
+        chunks = pickle.load(f)
 
     LOGGER.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
     embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-    LOGGER.info("Loading language model: %s", LLM_MODEL_NAME)
-    llm = pipeline(
-        task="text2text-generation",
-        model=LLM_MODEL_NAME,
-        max_length=300,
-    )
+    LOGGER.info("Loading tokenizer and LLM: %s", LLM_MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME)
+    model = AutoModelForSeq2SeqLM.from_pretrained(LLM_MODEL_NAME)
 
-    return index, chunks, embed_model, llm
+    model.to(DEVICE)
+    model.eval()
 
+    return index, chunks, embed_model, tokenizer, model
 
-# Retrieval utilities
+# Retrieval
 
 def semantic_search(
     query: str,
@@ -79,64 +91,56 @@ def semantic_search(
     embed_model: SentenceTransformer,
     top_k: int = TOP_K,
 ) -> List:
-    """
-    Perform semantic search over the FAISS index.
-
-    Args:
-        query (str): User query.
-        index (faiss.Index): FAISS index.
-        chunks (List): List of document chunks.
-        embed_model (SentenceTransformer): Embedding model.
-        top_k (int): Number of results to retrieve.
-
-    Returns:
-        List: Top-matching document chunks.
-    """
-    LOGGER.debug("Encoding query for semantic search")
+    """Retrieve top-k relevant document chunks."""
     query_embedding = embed_model.encode([query])
-
-    LOGGER.debug("Searching FAISS index (top_k=%d)", top_k)
     _, indices = index.search(query_embedding, top_k)
-
     return [chunks[i] for i in indices[0]]
 
-
 def build_context(chunks: List, max_chars: int = MAX_CONTEXT_CHARS) -> str:
-    """
-    Build a context string from retrieved document chunks.
-
-    Args:
-        chunks (List): Retrieved document chunks.
-        max_chars (int): Maximum allowed context length.
-
-    Returns:
-        str: Concatenated context string.
-    """
+    """Concatenate retrieved chunks into a context window."""
     context_parts = []
     current_length = 0
 
-    for chunk in chunks:
-        content = chunk.page_content
-        if current_length + len(content) > max_chars:
+    for chunk in chunks:  # chunk is already a string
+        if current_length + len(chunk) > max_chars:
             break
 
-        context_parts.append(content)
-        current_length += len(content)
+        context_parts.append(chunk)
+        current_length += len(chunk)
 
     return "\n\n".join(context_parts)
 
+# Generation
+
+def generate_answer(
+    prompt: str,
+    tokenizer: AutoTokenizer,
+    model: AutoModelForSeq2SeqLM,
+) -> str:
+    """Generate an answer using the LLM."""
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=MAX_INPUT_TOKENS,
+    ).to(DEVICE)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=False,
+        )
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 # Streamlit UI
 
-st.set_page_config(
-    page_title="PyDocQ&A",
-    layout="wide",
-)
-
+st.set_page_config(page_title="PyDocQ&A", layout="wide")
 st.title("🧠 PyDocQ&A")
-st.subheader("Ask questions about Python")
+st.subheader("Ask questions about Python documentation")
 
-index, chunks, embed_model, llm = load_resources()
+index, chunks, embed_model, tokenizer, model = load_resources()
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -144,16 +148,15 @@ if "chat_history" not in st.session_state:
 query = st.text_input("Ask a question about Python:")
 
 if query:
-    LOGGER.info("Received user query")
     with st.spinner("Thinking..."):
-        top_chunks = semantic_search(
+        retrieved_chunks = semantic_search(
             query=query,
             index=index,
             chunks=chunks,
             embed_model=embed_model,
         )
 
-        context = build_context(top_chunks)
+        context = build_context(retrieved_chunks)
 
         prompt = (
             "Answer the question using the context below.\n"
@@ -164,14 +167,12 @@ if query:
             f"{query}"
         )
 
-        LOGGER.info("Generating response from LLM")
-        response = llm(prompt)[0]["generated_text"]
+        answer = generate_answer(prompt, tokenizer, model)
 
         st.session_state.chat_history.append(("You", query))
-        st.session_state.chat_history.append(("PyDocQ&A", response))
+        st.session_state.chat_history.append(("PyDocQ&A", answer))
 
-
-# Chat display
+# Chat Display
 
 for speaker, message in st.session_state.chat_history:
     if speaker == "You":
