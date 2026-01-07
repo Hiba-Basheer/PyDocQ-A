@@ -1,57 +1,77 @@
 """
 Create sentence embeddings from text chunks and store them in a FAISS index.
 
-This module can be imported for reuse or executed directly for testing
-the embedding and indexing pipeline.
+This module loads text documents, chunks them semantically,
+creates embeddings, and persists both embeddings and metadata
+for downstream retrieval and Q&A.
 """
 
 import logging
+import os
+import pickle
 from typing import List
-import numpy as np
+
 import faiss
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from load_and_chunk import chunk_documents, load_txt_documents
+from load_and_chunk import load_txt_documents, chunk_documents
+
+# Configuration
+
+DATA_DIR = "data/python_docs"
+ARTIFACT_DIR = "artifacts"
+
+INDEX_PATH = os.path.join(ARTIFACT_DIR, "faiss.index")
+CHUNKS_PATH = os.path.join(ARTIFACT_DIR, "chunks.pkl")
+
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
 # Logging configuration
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 LOGGER = logging.getLogger(__name__)
 
-# Embedding & indexing functions
+# Embedding & indexing
 
-def create_embeddings(chunks: List[str]) -> "np.ndarray":
+def create_embeddings(
+    chunks: List[str],
+    model: SentenceTransformer,
+) -> np.ndarray:
     """
     Convert text chunks into vector embeddings.
 
     Args:
-        chunks (List[str]): List of document text chunks (plain strings).
+        chunks (List[str]): List of text chunks.
+        model (SentenceTransformer): Loaded embedding model.
 
     Returns:
-        np.ndarray: Array of shape (num_chunks, embedding_dimension).
+        np.ndarray: Embedding matrix (float32).
     """
-    LOGGER.info("Loading sentence transformer model")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    LOGGER.info("Encoding %d chunks into embeddings", len(chunks))
 
-    LOGGER.info("Encoding %d text chunks into embeddings", len(chunks))
-    embeddings = model.encode(chunks, show_progress_bar=True)
+    embeddings = model.encode(
+        chunks,
+        show_progress_bar=True,
+        convert_to_numpy=True,
+    ).astype("float32")
 
-    LOGGER.info("Embeddings created with shape %s", embeddings.shape)
+    LOGGER.info("Embeddings shape: %s", embeddings.shape)
     return embeddings
 
 
-def store_embeddings(embeddings: "np.ndarray") -> faiss.Index:
+def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
     """
-    Store embeddings in a FAISS index.
+    Build a FAISS index from embeddings.
 
     Args:
-        embeddings (np.ndarray): Embedding matrix of shape
-            (num_vectors, embedding_dimension).
+        embeddings (np.ndarray): Embedding matrix.
 
     Returns:
-        faiss.Index: FAISS index containing the embeddings.
+        faiss.Index: FAISS index.
     """
     LOGGER.info("Building FAISS index")
     dimension = embeddings.shape[1]
@@ -59,29 +79,51 @@ def store_embeddings(embeddings: "np.ndarray") -> faiss.Index:
     index = faiss.IndexFlatL2(dimension)
     index.add(embeddings)
 
-    LOGGER.info("FAISS index created with %d vectors", index.ntotal)
+    LOGGER.info("FAISS index contains %d vectors", index.ntotal)
     return index
 
 
+def save_artifacts(index: faiss.Index, chunks: List[str]) -> None:
+    """
+    Persist FAISS index and chunks to disk.
+    """
+    os.makedirs(ARTIFACT_DIR, exist_ok=True)
+
+    LOGGER.info("Saving FAISS index to %s", INDEX_PATH)
+    faiss.write_index(index, INDEX_PATH)
+
+    LOGGER.info("Saving chunks to %s", CHUNKS_PATH)
+    with open(CHUNKS_PATH, "wb") as f:
+        pickle.dump(chunks, f)
+
 # Script entry point
+
 def main() -> None:
     """
-    Load documents, chunk them, create embeddings, and store them in FAISS.
+    Full indexing pipeline:
+    - load documents
+    - chunk semantically
+    - embed
+    - build FAISS index
+    - persist artifacts
     """
-    data_dir = "data/python_docs"
-
-    LOGGER.info("Loading documents from %s", data_dir)
-    documents = load_txt_documents(data_dir)
+    LOGGER.info("Loading documents from %s", DATA_DIR)
+    documents = load_txt_documents(DATA_DIR)
 
     LOGGER.info("Chunking documents")
     chunks = chunk_documents(documents)
 
-    embeddings = create_embeddings(chunks)
-    index = store_embeddings(embeddings)
+    LOGGER.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
+    embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+    embeddings = create_embeddings(chunks, embed_model)
+    index = build_faiss_index(embeddings)
+
+    save_artifacts(index, chunks)
 
     LOGGER.info(
-        "Pipeline complete | Embeddings: %s | Index size: %d",
-        embeddings.shape,
+        "Indexing complete | Chunks: %d | Index size: %d",
+        len(chunks),
         index.ntotal,
     )
 

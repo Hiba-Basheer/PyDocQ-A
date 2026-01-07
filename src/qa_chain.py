@@ -2,7 +2,16 @@
 Run semantic search over a FAISS index and answer questions using an LLM.
 """
 
+# Environment
+
 import os
+
+# Prevent Hugging Face from importing TensorFlow / Flax
+os.environ["TRANSFORMERS_NO_TF"] = "1"
+os.environ["TRANSFORMERS_NO_FLAX"] = "1"
+
+# Standard Imports
+
 import logging
 import pickle
 from typing import List
@@ -12,21 +21,17 @@ import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-# Environment
-
-os.environ["TRANSFORMERS_NO_TF"] = "1"
-os.environ["TRANSFORMERS_NO_FLAX"] = "1"
-
 # Configuration
 
 ARTIFACT_DIR = "artifacts"
-INDEX_PATH = f"{ARTIFACT_DIR}/faiss.index"
-CHUNKS_PATH = f"{ARTIFACT_DIR}/chunks.pkl"
+INDEX_PATH = os.path.join(ARTIFACT_DIR, "faiss.index")
+CHUNKS_PATH = os.path.join(ARTIFACT_DIR, "chunks.pkl")
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-LLM_MODEL_NAME = "google/flan-t5-small"  # faster
+LLM_MODEL_NAME = "google/flan-t5-small"
 
 TOP_K = 10
+MAX_CONTEXT_CHARS = 2000
 MAX_INPUT_TOKENS = 512
 MAX_NEW_TOKENS = 200
 
@@ -40,45 +45,49 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-# Utilities
-
-def build_context(chunks, max_chars=2000):
-    """
-    Build a context string from retrieved document chunks.
-    Args:
-        chunks (List[str]): List of text chunks (plain strings).
-        max_chars (int): Maximum allowed context length.
-    Returns:
-        str: Concatenated context string.
-    """
-    context_parts = []
-    current_length = 0
-    for text in chunks:  
-        if current_length + len(text) > max_chars:
-            break
-        context_parts.append(text)
-        current_length += len(text)
-    return "\n\n".join(context_parts)
-
-
+# Retrieval Utilities
 
 def semantic_search(
     query: str,
     index: faiss.Index,
-    chunks: List,
+    chunks: List[str],
     embed_model: SentenceTransformer,
     top_k: int = TOP_K,
-) -> List:
+) -> List[str]:
+    """
+    Retrieve top-k relevant document chunks.
+    """
     query_embedding = embed_model.encode([query])
     _, indices = index.search(query_embedding, top_k)
     return [chunks[i] for i in indices[0]]
 
+
+def build_context(chunks: List[str], max_chars: int = MAX_CONTEXT_CHARS) -> str:
+    """
+    Concatenate retrieved chunks into a bounded context window.
+    """
+    context_parts = []
+    current_length = 0
+
+    for chunk in chunks:
+        if current_length + len(chunk) > max_chars:
+            break
+
+        context_parts.append(chunk)
+        current_length += len(chunk)
+
+    return "\n\n".join(context_parts)
+
+# Generation
 
 def generate_answer(
     prompt: str,
     tokenizer: AutoTokenizer,
     model: AutoModelForSeq2SeqLM,
 ) -> str:
+    """
+    Generate an answer using the LLM.
+    """
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
@@ -103,7 +112,7 @@ def main() -> None:
 
     LOGGER.info("Loading document chunks")
     with open(CHUNKS_PATH, "rb") as f:
-        chunks = pickle.load(f)
+        chunks: List[str] = pickle.load(f)
 
     LOGGER.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
     embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
@@ -120,10 +129,17 @@ def main() -> None:
     while True:
         query = input("\nAsk a question (or 'exit'): ").strip()
         if query.lower() == "exit":
+            LOGGER.info("Exiting application")
             break
 
-        top_chunks = semantic_search(query, index, chunks, embed_model)
-        context = build_context(top_chunks)
+        retrieved_chunks = semantic_search(
+            query=query,
+            index=index,
+            chunks=chunks,
+            embed_model=embed_model,
+        )
+
+        context = build_context(retrieved_chunks)
 
         prompt = (
             "Answer the question using the context below.\n"

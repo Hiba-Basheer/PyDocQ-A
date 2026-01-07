@@ -1,8 +1,10 @@
 """
 Streamlit application for semantic search and Q&A over Python documentation.
 
-This app loads a FAISS index and document chunks, performs semantic search
-using sentence embeddings, and answers user questions using a Seq2Seq LLM.
+The app:
+- Loads a FAISS index and text chunks
+- Retrieves relevant chunks via semantic search
+- Uses a Seq2Seq LLM to answer questions based on retrieved context
 """
 
 # Environment
@@ -28,18 +30,18 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 # Configuration
 
 ARTIFACT_DIR = "artifacts"
-INDEX_PATH = f"{ARTIFACT_DIR}/faiss.index"
-CHUNKS_PATH = f"{ARTIFACT_DIR}/chunks.pkl"
+INDEX_PATH = os.path.join(ARTIFACT_DIR, "faiss.index")
+CHUNKS_PATH = os.path.join(ARTIFACT_DIR, "chunks.pkl")
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-LLM_MODEL_NAME = "google/flan-t5-small"  
+LLM_MODEL_NAME = "google/flan-t5-small"
 
-TOP_K = 10
-MAX_CONTEXT_CHARS = 4000
+TOP_K = 4                     
+MAX_CONTEXT_CHARS = 1500      
 MAX_INPUT_TOKENS = 512
 MAX_NEW_TOKENS = 200
 
-DEVICE = "cpu" 
+DEVICE = "cpu"
 
 # Logging
 
@@ -49,26 +51,22 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-# Resource Loading
+# Resource Loading 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading models and index...")
 def load_resources() -> Tuple[
     faiss.Index,
-    List,
+    List[str],
     SentenceTransformer,
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
 ]:
-    """
-    Load and cache FAISS index, document chunks,
-    embedding model, tokenizer, and LLM.
-    """
     LOGGER.info("Loading FAISS index")
     index = faiss.read_index(INDEX_PATH)
 
     LOGGER.info("Loading document chunks")
     with open(CHUNKS_PATH, "rb") as f:
-        chunks = pickle.load(f)
+        chunks: List[str] = pickle.load(f)
 
     LOGGER.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
     embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
@@ -87,24 +85,22 @@ def load_resources() -> Tuple[
 def semantic_search(
     query: str,
     index: faiss.Index,
-    chunks: List,
+    chunks: List[str],
     embed_model: SentenceTransformer,
     top_k: int = TOP_K,
-) -> List:
-    """Retrieve top-k relevant document chunks."""
+) -> List[str]:
     query_embedding = embed_model.encode([query])
     _, indices = index.search(query_embedding, top_k)
     return [chunks[i] for i in indices[0]]
 
-def build_context(chunks: List, max_chars: int = MAX_CONTEXT_CHARS) -> str:
-    """Concatenate retrieved chunks into a context window."""
+
+def build_context(chunks: List[str], max_chars: int = MAX_CONTEXT_CHARS) -> str:
     context_parts = []
     current_length = 0
 
-    for chunk in chunks:  # chunk is already a string
+    for chunk in chunks:
         if current_length + len(chunk) > max_chars:
             break
-
         context_parts.append(chunk)
         current_length += len(chunk)
 
@@ -117,7 +113,6 @@ def generate_answer(
     tokenizer: AutoTokenizer,
     model: AutoModelForSeq2SeqLM,
 ) -> str:
-    """Generate an answer using the LLM."""
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
@@ -129,6 +124,7 @@ def generate_answer(
         outputs = model.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
+            min_new_tokens=40,     # prevents one-word answers
             do_sample=False,
         )
 
@@ -158,13 +154,15 @@ if query:
 
         context = build_context(retrieved_chunks)
 
+        # FLAN-T5 optimized RAG prompt
         prompt = (
-            "Answer the question using the context below.\n"
-            "If the answer is not in the context, say \"I don't know\".\n\n"
+            "You are a helpful assistant that answers questions using the given context.\n"
+            "If the answer cannot be found in the context, respond with: \"I don't know\".\n\n"
+            "Question:\n"
+            f"{query}\n\n"
             "Context:\n"
             f"{context}\n\n"
-            "Question:\n"
-            f"{query}"
+            "Answer:"
         )
 
         answer = generate_answer(prompt, tokenizer, model)
