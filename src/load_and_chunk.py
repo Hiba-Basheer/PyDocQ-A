@@ -12,16 +12,12 @@ import os
 import re
 from typing import List
 
-# =========================
 # Configuration
-# =========================
 
 CHUNK_SIZE = 500          # Maximum characters per chunk
 CHUNK_OVERLAP = 100       # Overlap between consecutive chunks
 
-# =========================
 # Logging configuration
-# =========================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,9 +25,7 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-# =========================
 # Document loading
-# =========================
 
 def load_txt_documents(data_dir: str) -> List[str]:
     """
@@ -59,9 +53,7 @@ def load_txt_documents(data_dir: str) -> List[str]:
     LOGGER.info("Loaded %d documents", len(documents))
     return documents
 
-# =========================
 # Document chunking
-# =========================
 
 def chunk_documents(documents: List[str]) -> List[str]:
     """
@@ -91,7 +83,6 @@ def chunk_documents(documents: List[str]) -> List[str]:
             if not paragraph:
                 continue
 
-            # If adding this paragraph exceeds chunk size
             if len(current_chunk) + len(paragraph) > CHUNK_SIZE:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
@@ -111,9 +102,7 @@ def chunk_documents(documents: List[str]) -> List[str]:
     LOGGER.info("Created %d chunks", len(chunks))
     return chunks
 
-# =========================
 # Script entry point
-# =========================
 
 def main() -> None:
     """
